@@ -83,23 +83,10 @@ class RoBERTaCacher:
         self.model.to(device)
         self.hidden_dim = self.model.config.hidden_size
 
-    @torch.no_grad()
-    def encode_words(self, words: List[str]) -> np.ndarray:
-        """[W, D] one mean-pooled vector per input word."""
-        if not words:
-            return np.zeros((0, self.hidden_dim), dtype=np.float32)
-        enc = self.tokenizer(
-            words,
-            is_split_into_words=True,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.max_length,
-        )
-        out = self.model(**{k: v.to(self.device) for k, v in enc.items()})
-        hidden = out.last_hidden_state[0].cpu().numpy()  # [num_tokens, D]
-        word_ids = enc.word_ids(0)
-
-        W = len(words)
+    def _pool_subwords(self, hidden: np.ndarray, word_ids: List, W: int) -> np.ndarray:
+        """Mean-pool subword hidden states [num_tokens, D] back to [W, D] by word_ids.
+        Tokens with word_id None (specials/padding) or >= W (truncated) are skipped;
+        words with no surviving subword stay zero."""
         vecs = np.zeros((W, self.hidden_dim), dtype=np.float32)
         cnt = np.zeros(W, dtype=np.int64)
         for ti, wid in enumerate(word_ids):
@@ -111,6 +98,59 @@ class RoBERTaCacher:
         vecs /= cnt[:, None]
         return vecs
 
+    @torch.no_grad()
+    def encode_words_batch(self, word_lists: List[List[str]]) -> List[np.ndarray]:
+        """Batched form of ``encode_words``: one RoBERTa forward for B word-lists.
+
+        Empty lists get a (0, D) array and are excluded from the forward. Padding is
+        attention-masked, so each non-empty sample's per-word vectors match encoding it
+        alone (real-token outputs are padding-invariant), modulo tiny batched-matmul
+        float noise. Returns a list of [W_i, D] arrays aligned to ``word_lists``."""
+        results: List[np.ndarray] = [np.zeros((0, self.hidden_dim), dtype=np.float32)
+                                     for _ in word_lists]
+        idxs = [i for i, wl in enumerate(word_lists) if wl]
+        if not idxs:
+            return results
+        batch = [word_lists[i] for i in idxs]
+        enc = self.tokenizer(
+            batch,
+            is_split_into_words=True,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_length,
+            padding=True,
+        )
+        out = self.model(**{k: v.to(self.device) for k, v in enc.items()})
+        hidden = out.last_hidden_state.float().cpu().numpy()  # [Bn, Tpad, D]
+        for row, i in enumerate(idxs):
+            results[i] = self._pool_subwords(hidden[row], enc.word_ids(row), len(word_lists[i]))
+        return results
+
+    def encode_words(self, words: List[str]) -> np.ndarray:
+        """[W, D] one mean-pooled vector per input word (batch of 1)."""
+        return self.encode_words_batch([words])[0]
+
+    def encode_sample_batch(
+        self,
+        timed_words_list: List[List[TimedWord]],
+        context_starts: List[float],
+        num_bins: int = 120,
+        bin_dur: float = 0.05,
+    ) -> List[np.ndarray]:
+        """Batched form of ``encode_sample``: one RoBERTa forward for B samples.
+        Returns a list of [num_bins, D] float16 grids aligned to the inputs."""
+        vecs_list = self.encode_words_batch([[w.text for w in tw] for tw in timed_words_list])
+        results: List[np.ndarray] = []
+        for tw, vecs, cs in zip(timed_words_list, vecs_list, context_starts):
+            if not tw:
+                grid = np.zeros((num_bins, self.hidden_dim), dtype=np.float32)
+            else:
+                spans: List[Tuple[float, float]] = [(w.start, w.end) for w in tw]
+                grid = place_words_on_grid(vecs, spans, clip_start=cs, num_bins=num_bins, bin_dur=bin_dur)
+            # Frozen features feed a GRU; float16 on disk is plenty and halves cache size.
+            results.append(grid.astype(np.float16))
+        return results
+
     def encode_sample(
         self,
         timed_words: List[TimedWord],
@@ -118,9 +158,6 @@ class RoBERTaCacher:
         num_bins: int = 120,
         bin_dur: float = 0.05,
     ) -> np.ndarray:
-        """-> [num_bins, D] grid-aligned word embeddings."""
-        if not timed_words:
-            return np.zeros((num_bins, self.hidden_dim), dtype=np.float32)
-        vecs = self.encode_words([w.text for w in timed_words])
-        spans: List[Tuple[float, float]] = [(w.start, w.end) for w in timed_words]
-        return place_words_on_grid(vecs, spans, clip_start=context_start, num_bins=num_bins, bin_dur=bin_dur)
+        """-> [num_bins, D] grid-aligned word embeddings, float16 (batch of 1)."""
+        return self.encode_sample_batch([timed_words], [context_start],
+                                        num_bins=num_bins, bin_dur=bin_dur)[0]

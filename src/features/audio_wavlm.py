@@ -114,25 +114,10 @@ class WavLMCacher:
                 nz,
             )
 
-    @torch.no_grad()
-    def encode(
-        self,
-        waveform: np.ndarray,
-        num_bins: int = 120,
-        bin_dur: float = 0.05,
-    ) -> np.ndarray:
-        """waveform: 1-D float32 @ sample_rate (exactly the 6 s clip).
-        Returns [num_bins, L, D] (all) or [num_bins, D] (sum)."""
-        inputs = self.feature_extractor(
-            waveform, sampling_rate=self.sample_rate, return_tensors="pt"
-        )
-        input_values = inputs.input_values.to(self.device)
-        out = self.model(input_values)
-        # hidden_states: tuple length L of [1, T, D]
-        hs = torch.stack(out.hidden_states, dim=0)  # [L, 1, T, D]
-        hs = hs.squeeze(1).permute(1, 0, 2).contiguous()  # [T, L, D]
-        feats = hs.cpu().numpy().astype(np.float32)
-
+    def _grid_from_frames(self, feats: np.ndarray, num_bins: int, bin_dur: float) -> np.ndarray:
+        """[T, L, D] float32 encoder frames -> [num_bins, L, D] (all) or [num_bins, D]
+        (sum), as float16 for the on-disk cache. All pooling/weighting math stays
+        float32; only the returned array is cast to float16."""
         T = feats.shape[0]
         ftimes = wavlm_frame_times(T)
         grid = pool_frames_to_grid(feats, ftimes, num_bins=num_bins, bin_dur=bin_dur)  # [120,L,D]
@@ -140,7 +125,45 @@ class WavLMCacher:
             # Fixed weighted combination across the layer axis -> [120, D].
             # (Not a flat sum -- weights front-load the lower-middle layers.)
             grid = np.einsum("l,tld->td", self.layer_weights, grid).astype(np.float32)  # [120, D]
-        return grid
+        # Frozen features feed a GRU; float16 on disk is plenty and halves cache size.
+        return grid.astype(np.float16)
+
+    @torch.no_grad()
+    def encode_batch(
+        self,
+        waveforms: Sequence[np.ndarray],
+        num_bins: int = 120,
+        bin_dur: float = 0.05,
+    ) -> List[np.ndarray]:
+        """Batched form of ``encode``: one WavLM forward for B clips.
+
+        waveforms: sequence of 1-D float32 @ sample_rate. In this pipeline every clip
+        is fixed to exactly context_seconds (96000 samp), so the batch needs no padding
+        and each sample's result is identical to encoding it alone (WavLM has no cross-
+        sample interaction and this feature extractor does not per-sample normalize).
+        Returns a list of [num_bins, L, D] (all) or [num_bins, D] (sum) float16 arrays,
+        one per input, in order."""
+        arr = [np.asarray(w, dtype=np.float32) for w in waveforms]
+        inputs = self.feature_extractor(arr, sampling_rate=self.sample_rate, return_tensors="pt")
+        input_values = inputs.input_values.to(self.device)  # [B, N]
+        out = self.model(input_values)
+        # hidden_states: tuple length L of [B, T, D] -> [B, T, L, D]
+        hs = torch.stack(out.hidden_states, dim=0).permute(1, 2, 0, 3).contiguous()
+        feats_b = hs.float().cpu().numpy()  # float32 intermediate [B, T, L, D]
+        return [self._grid_from_frames(feats_b[b], num_bins, bin_dur) for b in range(feats_b.shape[0])]
+
+    def encode(
+        self,
+        waveform: np.ndarray,
+        num_bins: int = 120,
+        bin_dur: float = 0.05,
+    ) -> np.ndarray:
+        """waveform: 1-D float32 @ sample_rate (exactly the 6 s clip).
+        Returns [num_bins, L, D] (all) or [num_bins, D] (sum), float16.
+
+        Thin wrapper over :meth:`encode_batch` (batch of 1) so the single- and
+        batched-caching paths share one numerical implementation."""
+        return self.encode_batch([waveform], num_bins=num_bins, bin_dur=bin_dur)[0]
 
     @property
     def num_layers(self) -> int:

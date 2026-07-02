@@ -1,5 +1,5 @@
 # Data & heavy artifacts
-data/
+*/processed/
 reports/runs/
 reports/ablation/
 *.parquet
