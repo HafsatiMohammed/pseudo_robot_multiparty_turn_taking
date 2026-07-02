@@ -113,7 +113,7 @@ Per `sample_id`, under the cache dir, with `features_index.parquet`
 
 | Artifact | Shape | Source | Encoder (frozen, offline, eval/no_grad) |
 |---|---|---|---|
-| audio | `[120,13,768]` (or `[120,768]` summed) | `human_mix_clip` (loaded, resampled to 16 kHz, fixed 6 s; **skipped if `missing_audio`** → zeros at train time) | `microsoft/wavlm-base-plus` (~94M, frozen) |
+| audio | `[120,768]` default (fixed layer-3–8 weighted collapse; `[120,13,768]` under `--layer-mode all`) | `human_mix_clip` (loaded, resampled to 16 kHz, fixed 6 s; **skipped if `missing_audio`** → zeros at train time) | `microsoft/wavlm-base-plus` (~94M, frozen) |
 | text | `[120,768]` | `text_context` events (human, `end ≤ t`); AMI words only behind `--text-source ami_words` | `roberta-base` (~125M, frozen) |
 
 Encoders are never instantiated or backpropped in training (`frozen=0` asserted). A

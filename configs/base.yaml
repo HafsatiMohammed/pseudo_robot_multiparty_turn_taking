@@ -31,7 +31,15 @@ encoders:
   audio:
     model: microsoft/wavlm-base-plus
     sample_rate: 16000
-    layer_mode: all           # all -> [120,L,D] (layer-weighting) | sum -> [120,D]
+    # sum -> [120,768] fixed weighted layer combine (~150 GB cache, tractable);
+    # all -> [120,L,D] keeps every hidden state (~13x larger, enables learnable weighting).
+    layer_mode: sum
+    # Fixed (NOT learned) WavLM layer weights for layer_mode=sum: uniform mean of
+    # layers 3-8 (lower-middle transformer layers carry the turn-taking / paralinguistic
+    # signal), zero elsewhere. 13 entries (0=CNN/embed, 1..12=transformer). Normalized
+    # to sum 1 in code. Passed to the cache script via --layer-weights (omit to use the
+    # same layer 3-8 mean as the built-in default).
+    layer_weights: [0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0]
     human_group_mix: mix      # mix | per_speaker  (documented in Phase 1)
   text:
     model: roberta-base
@@ -66,8 +74,11 @@ model:
   frame_branch: {type: gru, in_channels: 7, hidden_dim: 128, num_layers: 2,
                  dropout: 0.3, output_dim: 128, bidirectional: true}
   scalar_branch: {in_dim: 6, hidden_dims: [64, 64], output_dim: 64, dropout: 0.2}
+  # layer_mode=sum caches a single collapsed [120,768] audio rep, so the branch
+  # does NOT do learnable layer weighting (num_layers=1). Set use_layer_weighting=true
+  # and num_layers=13 only if you re-cache with encoders.audio.layer_mode=all.
   audio_branch: {wavlm_dim: 768, proj_dim: 64, output_dim: 128,
-                 use_layer_weighting: true, num_layers: 13,
+                 use_layer_weighting: false, num_layers: 1,
                  encoder: {type: gru, hidden_dim: 128, num_layers: 2,
                            dropout: 0.3, bidirectional: true}}
   text_branch: {mode: sequence, text_dim: 768, proj_dim: 64, output_dim: 128,

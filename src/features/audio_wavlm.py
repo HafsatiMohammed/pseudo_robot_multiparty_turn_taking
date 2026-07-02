@@ -10,17 +10,73 @@ Per sample:
   [context_start, context_end], 16 kHz mono, fixed to exactly 6 s (96000 samp).
   WavLM (~20 ms frames) -> mean-pool into the 120 x 50 ms bins.
   layer_mode="all" -> [120, L, D] (enables learnable layer-weighting)
-  layer_mode="sum" -> [120, D]    (sum across layers; smaller on disk)
+  layer_mode="sum" -> [120, D]    (FIXED weighted layer combine; smaller on disk)
+
+layer_mode="sum" does NOT flat-sum all 13 hidden states. It collapses the layer
+axis with a fixed (not learned) normalized weight vector concentrated on the
+lower-middle transformer layers (default: uniform mean of layers 3-8), which
+prior layerwise analyses show carry the paralinguistic / turn-taking signal.
+The weights are fixed on purpose so the offline cache stays a single [T, 768]
+representation (~150 GB) instead of the ~13x-larger all-layers tensor. See the
+paper note: "fixed WavLM layer-3-8 mean".
 """
 
 from __future__ import annotations
 
-from typing import List
+import logging
+from typing import List, Optional, Sequence
 
 import numpy as np
 import torch
 
 from .align import pool_frames_to_grid, wavlm_frame_times
+
+logger = logging.getLogger(__name__)
+
+# Default fixed layer prior for layer_mode="sum": uniform mean over the
+# lower-middle transformer layers (indices 3..8 inclusive), zero elsewhere.
+# WavLM-base-plus exposes 13 hidden states (index 0 = CNN/embedding output,
+# 1..12 = transformer layers).
+_DEFAULT_SUM_BAND = (3, 8)  # inclusive layer indices
+
+
+def build_layer_weights(
+    layer_mode: str,
+    layer_weights: Optional[Sequence[float]],
+    num_layers: int,
+) -> Optional[np.ndarray]:
+    """Return the normalized [num_layers] weight vector used to collapse the WavLM
+    layer axis when ``layer_mode == "sum"``, or ``None`` for ``layer_mode == "all"``.
+
+    - ``layer_mode == "all"``: returns ``None`` (layer axis is kept; no collapse).
+    - explicit ``layer_weights``: validated to length ``num_layers`` and normalized
+      to sum to 1.
+    - ``None`` + ``"sum"``: the documented default prior -- a uniform mean over
+      layers 3..8 inclusive (zero elsewhere), normalized. This is NOT a flat mean
+      over all layers.
+    """
+    if layer_mode != "sum":
+        return None
+    if layer_weights is not None:
+        w = np.asarray(layer_weights, dtype=np.float64).reshape(-1)
+        if w.shape[0] != num_layers:
+            raise ValueError(
+                f"layer_weights must have length {num_layers} (got {w.shape[0]}); "
+                "WavLM-base-plus exposes 13 hidden states (0=CNN/embed, 1..12=transformer)."
+            )
+    else:
+        lo, hi = _DEFAULT_SUM_BAND
+        if hi >= num_layers:
+            raise ValueError(
+                f"default layer band {_DEFAULT_SUM_BAND} exceeds num_layers={num_layers}; "
+                "pass an explicit layer_weights vector."
+            )
+        w = np.zeros(num_layers, dtype=np.float64)
+        w[lo : hi + 1] = 1.0
+    total = float(w.sum())
+    if total <= 0.0:
+        raise ValueError("layer_weights must sum to a positive value.")
+    return (w / total).astype(np.float32)
 
 
 class WavLMCacher:
@@ -30,6 +86,7 @@ class WavLMCacher:
         device: str = "cpu",
         layer_mode: str = "all",
         sample_rate: int = 16000,
+        layer_weights: Optional[Sequence[float]] = None,
     ):
         if layer_mode not in ("all", "sum"):
             raise ValueError("layer_mode must be 'all' or 'sum'")
@@ -43,6 +100,19 @@ class WavLMCacher:
         self.model.eval()
         self.model.requires_grad_(False)
         self.model.to(device)
+
+        # Fixed (not learned) layer-collapse weights, only used for layer_mode="sum".
+        # Logged once so each cache run records exactly which layers were used.
+        self.layer_weights = build_layer_weights(layer_mode, layer_weights, self.num_layers)
+        if self.layer_weights is not None:
+            nz = np.flatnonzero(self.layer_weights).tolist()
+            logger.info(
+                "WavLM layer_mode=sum | FIXED normalized layer weights (len=%d): %s "
+                "| nonzero layer indices=%s",
+                len(self.layer_weights),
+                np.array2string(self.layer_weights, precision=4, separator=",", max_line_width=200),
+                nz,
+            )
 
     @torch.no_grad()
     def encode(
@@ -67,7 +137,9 @@ class WavLMCacher:
         ftimes = wavlm_frame_times(T)
         grid = pool_frames_to_grid(feats, ftimes, num_bins=num_bins, bin_dur=bin_dur)  # [120,L,D]
         if self.layer_mode == "sum":
-            grid = grid.sum(axis=1).astype(np.float32)  # [120, D]
+            # Fixed weighted combination across the layer axis -> [120, D].
+            # (Not a flat sum -- weights front-load the lower-middle layers.)
+            grid = np.einsum("l,tld->td", self.layer_weights, grid).astype(np.float32)  # [120, D]
         return grid
 
     @property

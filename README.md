@@ -66,8 +66,13 @@ python scripts/prepare_dataset.py --manifest $MAN --speech-regions $REGIONS \
     --output data/processed/timing
 
 # Phase 1 — cache frozen WavLM (from human_mix_clip) + RoBERTa (from text_context)
+# --layer-mode sum collapses the WavLM layer axis with a FIXED (not learned) weighting
+# concentrated on layers 3-8 (lower-middle) -> [120,768] per sample (~150 GB cache).
+# Omit --layer-weights for the default layer 3-8 mean; pass an explicit 13-vector to
+# override (normalized in code). Use --layer-mode all only to keep every layer ([120,13,768]).
 python -m scripts.cache_features.run --manifest $MAN --output data/processed/cache \
-    --modality both --clips-root $CLIPS --speech-regions $REGIONS --layer-mode all
+    --modality both --clips-root $CLIPS --speech-regions $REGIONS --layer-mode sum \
+    --layer-weights 0,0,0,1,1,1,1,1,1,0,0,0,0
 
 # Phase 4 — non-learned baselines (majority, VA-Silence, VA-Threshold) + DET/EER
 python scripts/eval_baselines.py --timing-dir data/processed/timing \

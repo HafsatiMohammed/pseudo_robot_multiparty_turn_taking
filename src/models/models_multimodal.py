@@ -314,8 +314,10 @@ DEFAULT_CONFIG = {
                          "bidirectional": True},
         "scalar_branch": {"in_dim": 6, "hidden_dims": [64, 64], "output_dim": 64,
                           "dropout": 0.2},
+        # layer_mode=sum caches a collapsed [T,768] audio rep -> no learnable layer
+        # weighting. Flip to use_layer_weighting=True, num_layers=13 for layer_mode=all.
         "audio_branch": {"wavlm_dim": 768, "proj_dim": 64, "output_dim": 128,
-                         "use_layer_weighting": True, "num_layers": 13,
+                         "use_layer_weighting": False, "num_layers": 1,
                          "encoder": {"type": "gru", "hidden_dim": 128, "num_layers": 2,
                                      "dropout": 0.3, "bidirectional": True}},
         "text_branch": {"mode": "sequence", "text_dim": 768, "proj_dim": 64,

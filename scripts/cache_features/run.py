@@ -56,7 +56,14 @@ def main(args):
     do_audio = args.modality in ("audio", "both")
     do_text = args.modality in ("text", "both")
 
-    audio_cacher = (WavLMCacher(model_name=args.wavlm_model, device=args.device, layer_mode=args.layer_mode)
+    # Optional fixed layer-collapse weights (only meaningful for --layer-mode sum).
+    # CLI overrides config; None falls back to the documented layer 3-8 mean prior.
+    layer_weights = None
+    if args.layer_weights:
+        layer_weights = [float(x) for x in args.layer_weights.split(",") if x.strip() != ""]
+
+    audio_cacher = (WavLMCacher(model_name=args.wavlm_model, device=args.device,
+                                layer_mode=args.layer_mode, layer_weights=layer_weights)
                     if do_audio else None)
     text_cacher = RoBERTaCacher(model_name=args.roberta_model, device=args.device) if do_text else None
 
@@ -126,6 +133,8 @@ def main(args):
         "roberta_model": args.roberta_model if do_text else None,
         "layer_mode": args.layer_mode if do_audio else None,
         "num_layers": audio_cacher.num_layers if do_audio else None,
+        "layer_weights": (audio_cacher.layer_weights.tolist()
+                          if do_audio and audio_cacher.layer_weights is not None else None),
         "audio_dim": audio_cacher.hidden_dim if do_audio else None,
         "text_dim": text_cacher.hidden_dim if do_text else None,
         "text_source": args.text_source,
@@ -151,6 +160,11 @@ def build_argparser():
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument("--device", default="cpu")
     p.add_argument("--layer-mode", choices=["all", "sum"], default="all")
+    p.add_argument("--layer-weights", default=None,
+                   help="Comma-separated fixed WavLM layer weights for --layer-mode sum "
+                        "(length = num hidden states = 13; normalized in code). "
+                        "Omit to use the default layer 3-8 mean prior. "
+                        "Example: 0,0,0,1,1,1,1,1,1,0,0,0,0")
     p.add_argument("--wavlm-model", default="microsoft/wavlm-base-plus")
     p.add_argument("--roberta-model", default="roberta-base")
     p.add_argument("--num-frames", type=int, default=120)
