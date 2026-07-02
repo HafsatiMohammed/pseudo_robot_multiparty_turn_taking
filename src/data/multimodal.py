@@ -16,6 +16,7 @@ Contract:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -25,6 +26,8 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .dataset import TimingDataset
 from .loaders import collate_batch
+
+logger = logging.getLogger(__name__)
 
 
 class MultimodalDataset(TimingDataset):
@@ -87,6 +90,15 @@ class MultimodalDataset(TimingDataset):
             self.audio_zero_shape = (self.num_frames, self.audio_dim)
         self.text_zero_shape = (self.num_frames, self.text_dim)
 
+        # Cache is written as float16 (see scripts.cache_features.run); we up-cast to
+        # float32 on load for the GRU. Log the on-disk dtype once per split so any
+        # silent dtype drift (e.g. an old float32 cache) is visible in the logs.
+        self._logged_disk_dtype = False
+        disk_dtype = meta.get("feature_dtype")
+        if disk_dtype is not None:
+            logger.info("%s: cached features on disk as %s -> up-cast to float32 on load",
+                        split, disk_dtype)
+
     def truncate(self, n: Optional[int]) -> "MultimodalDataset":
         """Keep only the first n rows (fast dry runs). Labels/weights stay aligned."""
         if n is not None and n < len(self.df):
@@ -112,8 +124,12 @@ class MultimodalDataset(TimingDataset):
             if self.require_cache:
                 raise FileNotFoundError(f"Cached feature missing: {p}")
             return np.zeros(zero_shape, dtype=np.float32)
-        arr = np.load(p).astype(np.float32)
-        return arr
+        raw = np.load(p)  # float16 on disk (frozen features); up-cast for the GRU
+        if not self._logged_disk_dtype:
+            logger.info("%s: loaded cached feature %s with on-disk dtype=%s -> float32",
+                        self.split, rel, raw.dtype)
+            self._logged_disk_dtype = True
+        return raw.astype(np.float32)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = super().__getitem__(idx)
@@ -122,6 +138,10 @@ class MultimodalDataset(TimingDataset):
         text = self._load_cached(self.text_paths.get(sid), self.text_zero_shape)
         item["audio"] = torch.from_numpy(audio)
         item["text"] = torch.from_numpy(text)
+        # Guard against silent dtype drift: the GRU expects float32, regardless of the
+        # float16 on-disk cache.
+        assert item["audio"].dtype == torch.float32 and item["text"].dtype == torch.float32, \
+            f"frozen features must up-cast to float32 (got audio={item['audio'].dtype}, text={item['text'].dtype})"
         return item
 
 
