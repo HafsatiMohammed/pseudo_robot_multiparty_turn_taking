@@ -1,0 +1,6 @@
+22:48:00 INFO baselines | train=4 val=2 test=2
+22:48:01 INFO VA-silence EER = 1.0000 at theta_start = 2.434
+22:48:01 INFO VA-threshold EER = 1.0000 at theta_start = 2.434
+22:48:01 INFO Saved DET figure: reports/baselines/det_curve.png
+22:48:01 INFO Tuned: VA-Silence theta_start=1.4 (val F1=0.333); VA-Threshold theta_start=1.4, theta_bc=0.1 (val F1=0.333)
+22:48:01 INFO Saved -> reports/baselines/baseline_metrics.json, baseline_table.md, baseline_preds_test.npz, det_*.csv, det_curve.png

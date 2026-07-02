@@ -1,0 +1,14 @@
+{
+  "silence": {
+    "eer": 1.0,
+    "eer_theta": 2.4338847526034018,
+    "n_entry": 1,
+    "n_wait": 1
+  },
+  "threshold": {
+    "eer": 1.0,
+    "eer_theta": 2.4338847526034018,
+    "n_entry": 1,
+    "n_wait": 1
+  }
+}

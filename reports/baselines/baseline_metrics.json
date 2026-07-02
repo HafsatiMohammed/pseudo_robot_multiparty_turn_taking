@@ -1,0 +1,172 @@
+{
+  "majority": {
+    "params": {
+      "class": 0
+    },
+    "test": {
+      "macro_f1": 0.2222222222222222,
+      "weighted_f1": 0.3333333333333333,
+      "balanced_accuracy": 0.5,
+      "wait_f1": 0.6666666666666666,
+      "bc_f1": 0.0,
+      "start_f1": 0.0,
+      "false_entry": null,
+      "missed_entry": 1.0,
+      "per_class": {
+        "WAIT": {
+          "precision": 0.5,
+          "recall": 1.0,
+          "f1": 0.6666666666666666,
+          "support": 1
+        },
+        "BACKCHANNEL": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 0
+        },
+        "START_SPEAKING": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 1
+        }
+      },
+      "bc_as_turn": null,
+      "turn_as_bc": 0.0,
+      "confusion_matrix": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ]
+      ],
+      "n": 2
+    }
+  },
+  "va_silence": {
+    "params": {
+      "theta_start": 1.4,
+      "val_macro_f1": 0.3333333333333333
+    },
+    "test": {
+      "macro_f1": 0.2222222222222222,
+      "weighted_f1": 0.3333333333333333,
+      "balanced_accuracy": 0.5,
+      "wait_f1": 0.0,
+      "bc_f1": 0.0,
+      "start_f1": 0.6666666666666666,
+      "false_entry": 0.5,
+      "missed_entry": 0.0,
+      "per_class": {
+        "WAIT": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 1
+        },
+        "BACKCHANNEL": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 0
+        },
+        "START_SPEAKING": {
+          "precision": 0.5,
+          "recall": 1.0,
+          "f1": 0.6666666666666666,
+          "support": 1
+        }
+      },
+      "bc_as_turn": null,
+      "turn_as_bc": 0.0,
+      "confusion_matrix": [
+        [
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "n": 2,
+      "eer": 1.0
+    }
+  },
+  "va_threshold": {
+    "params": {
+      "theta_start": 1.4,
+      "theta_bc": 0.1,
+      "val_macro_f1": 0.3333333333333333
+    },
+    "test": {
+      "macro_f1": 0.2222222222222222,
+      "weighted_f1": 0.3333333333333333,
+      "balanced_accuracy": 0.5,
+      "wait_f1": 0.0,
+      "bc_f1": 0.0,
+      "start_f1": 0.6666666666666666,
+      "false_entry": 0.5,
+      "missed_entry": 0.0,
+      "per_class": {
+        "WAIT": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 1
+        },
+        "BACKCHANNEL": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 0
+        },
+        "START_SPEAKING": {
+          "precision": 0.5,
+          "recall": 1.0,
+          "f1": 0.6666666666666666,
+          "support": 1
+        }
+      },
+      "bc_as_turn": null,
+      "turn_as_bc": 0.0,
+      "confusion_matrix": [
+        [
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "n": 2,
+      "eer": 1.0
+    }
+  }
+}

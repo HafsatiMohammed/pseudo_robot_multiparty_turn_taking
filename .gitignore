@@ -1,0 +1,21 @@
+# Data & heavy artifacts
+data/
+reports/runs/
+reports/ablation/
+*.parquet
+*.wav
+*.ckpt
+*.pt
+*.npy
+*.npz
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# Keep the dev fixture (tiny, hand-made)
+!tests/fixtures/manifest_sample.jsonl

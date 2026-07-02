@@ -1,0 +1,76 @@
+# Base configuration shared by all systems. Per-system YAMLs override `system`
+# and any model knobs. Paths are read from here -- do NOT hardcode them in code.
+
+paths:
+  # Local AMI corpus root (may move; keep it here, not in code).
+  ami_root: /home/mohammed/Documents/robot-group-turn-taking-labeler/data/ami_original
+  # Manifest produced upstream (does NOT exist yet -> scripts fail loudly if absent).
+  manifest: /home/mohammed/Documents/robot-group-turn-taking-labeler/data/processed/final_manifest.jsonl
+  # Dev fixture to use until the real manifest lands.
+  fixture_manifest: tests/fixtures/manifest_sample.jsonl
+  # Phase 1a timing parquet output.
+  timing_dir: data/processed/timing
+  # Phase 1 cached frozen-encoder features.
+  cache_dir: data/processed/cache
+  # Per-run checkpoints/logs and assembled tables/figures.
+  runs_dir: reports/runs
+  reports_dir: reports/ablation
+
+data:
+  frame_seq_len: 120          # 120 frames = 6 s @ 50 ms
+  frame_shift: 0.05           # 20 Hz
+  context_seconds: 6.0
+  frame_dim: 7
+  scalar_dim: 6
+  gap_threshold: 0.3          # word-merge gap for speech regions (s)
+  include_vocalsound: false   # lexical <w> only count as activity
+  text_source: ami_words      # ami_words | manifest_events
+
+# Frozen, offline-cached encoders (never fine-tuned, never instantiated in training).
+encoders:
+  audio:
+    model: microsoft/wavlm-base-plus
+    sample_rate: 16000
+    layer_mode: all           # all -> [120,L,D] (layer-weighting) | sum -> [120,D]
+    human_group_mix: mix      # mix | per_speaker  (documented in Phase 1)
+  text:
+    model: roberta-base
+    mode: sequence            # frame-aligned [120,768]
+
+train:
+  batch_size: 32
+  num_workers: 4
+  use_weighted_sampler: true
+  optimizer: adamw
+  lr: 0.0003
+  weight_decay: 0.01
+  scheduler: cosine           # cosine | plateau
+  grad_clip: 1.0
+  max_epochs: 60
+  early_stop_patience: 10     # on val macro-F1
+  bc_upweight: 1.5            # mild BC up-weight in weighted CE
+  seeds: [13, 21, 42]
+
+eval:
+  pause_theta: 0.6            # S1 stratum split (s)
+  bootstrap_reps: 1000
+  det_grid: 400
+
+# System selected per run (overridden by per-system config or --system).
+system: timing
+
+# Architecture: IDENTICAL across all four systems (matched capacity). A system
+# only changes which modalities are active; disabled ones are zeroed at branch
+# input. Mirrors models_multimodal.DEFAULT_CONFIG.
+model:
+  frame_branch: {type: gru, in_channels: 7, hidden_dim: 128, num_layers: 2,
+                 dropout: 0.3, output_dim: 128, bidirectional: true}
+  scalar_branch: {in_dim: 6, hidden_dims: [64, 64], output_dim: 64, dropout: 0.2}
+  audio_branch: {wavlm_dim: 768, proj_dim: 64, output_dim: 128,
+                 use_layer_weighting: true, num_layers: 13,
+                 encoder: {type: gru, hidden_dim: 128, num_layers: 2,
+                           dropout: 0.3, bidirectional: true}}
+  text_branch: {mode: sequence, text_dim: 768, proj_dim: 64, output_dim: 128,
+                encoder: {type: gru, hidden_dim: 128, num_layers: 2,
+                          dropout: 0.3, bidirectional: true}}
+  fusion: {type: gated, common_dim: 128, hidden_dims: [128], dropout: 0.3}
