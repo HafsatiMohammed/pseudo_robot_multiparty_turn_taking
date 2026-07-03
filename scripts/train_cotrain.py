@@ -64,7 +64,7 @@ if str(_REPO_ROOT) not in sys.path:
 # Reuse the standalone building blocks verbatim -- single source of truth, so the two
 # paths cannot drift (loss weighting, scheduler, checkpoint pruning, probs I/O).
 from scripts.train import build_loss, build_scheduler, prune_checkpoints, save_probs
-from src.data.multimodal import MultimodalDataset, collate_multimodal
+from src.data.multimodal import MultimodalDataset, collate_multimodal, resolve_packed_dir
 from src.eval.metrics import compute_all, macro_f1, per_class_prf
 from src.models.models_multimodal import SYSTEM_MODALITIES, build_system
 from src.utils.checkpoint import load_checkpoint, save_checkpoint
@@ -99,20 +99,25 @@ class _FixedOrderSampler(Sampler):
         return len(self._indices)
 
 
-def _build_datasets(timing_dir, cache_dir, max_samples, require_cache=True):
+def _build_datasets(timing_dir, cache_dir, max_samples, require_cache=True, cache_format="auto"):
     """Train/val/test datasets with val/test reusing TRAIN normalization stats
-    (identical to get_multimodal_dataloaders)."""
+    (identical to get_multimodal_dataloaders). Co-training reads ALL modalities (every system
+    trains on the shared batch), so no modality gating -- only the packed-cache I/O win applies."""
+    resolved = resolve_packed_dir(cache_dir, cache_format, None)
+    if resolved is not None:
+        logger.info("co-train cache: PACKED memmap at %s", resolved)
+    pk = str(resolved) if resolved else None
     timing_dir = Path(timing_dir)
     train_ds = MultimodalDataset(parquet_path=str(timing_dir / "train.parquet"),
                                  cache_dir=cache_dir, split="train", normalize=True,
-                                 require_cache=require_cache).truncate(max_samples)
+                                 require_cache=require_cache, packed_dir=pk).truncate(max_samples)
     stats = train_ds.norm_stats()
     val_ds = MultimodalDataset(parquet_path=str(timing_dir / "validation.parquet"),
                                cache_dir=cache_dir, split="validation", normalize=True,
-                               require_cache=require_cache, norm_stats=stats).truncate(max_samples)
+                               require_cache=require_cache, norm_stats=stats, packed_dir=pk).truncate(max_samples)
     test_ds = MultimodalDataset(parquet_path=str(timing_dir / "test.parquet"),
                                 cache_dir=cache_dir, split="test", normalize=True,
-                                require_cache=require_cache, norm_stats=stats).truncate(max_samples)
+                                require_cache=require_cache, norm_stats=stats, packed_dir=pk).truncate(max_samples)
     return train_ds, val_ds, test_ds
 
 
@@ -231,7 +236,8 @@ def train_seed(args, seed):
                 seed, device, max_epochs)
 
     # ---- datasets (val/test reuse train norm stats), built once; no RNG consumed ----
-    train_ds, val_ds, test_ds = _build_datasets(args.timing_dir, args.cache_dir, args.max_samples)
+    train_ds, val_ds, test_ds = _build_datasets(args.timing_dir, args.cache_dir, args.max_samples,
+                                                cache_format=args.cache_format)
 
     pin = str(device).startswith("cuda")
     drop_last = len(train_ds) > batch_size
@@ -517,6 +523,8 @@ def build_argparser():
     p.add_argument("--keep-last-k", type=int, default=0)
     p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--device", default="cpu")
+    p.add_argument("--cache-format", default="auto", choices=["auto", "memmap", "per_file"],
+                   help="auto: packed memmap if cache_packed/ is complete, else per-file.")
     p.add_argument("--resume", action="store_true",
                    help="Resume each system from its own last.ckpt (skips fully-complete seeds).")
     p.add_argument("--stop-after-epoch", type=int, default=None,

@@ -89,7 +89,7 @@ def run_training(system, seed, args):
     cmd = [sys.executable, "scripts/train.py", "--base", args.base, "--system", system,
            "--seed", str(seed), "--timing-dir", args.timing_dir, "--cache-dir", args.cache_dir,
            "--out", str(run_dir), "--device", args.device, "--num-workers", str(args.num_workers),
-           "--log-level", args.log_level]
+           "--cache-format", args.cache_format, "--log-level", args.log_level]
     if args.epochs is not None:
         cmd += ["--max-epochs", str(args.epochs)]
     if args.max_samples is not None:
@@ -117,8 +117,8 @@ def run_cotrain(args):
     cmd = [sys.executable, "scripts/train_cotrain.py", "--base", args.base,
            "--timing-dir", args.timing_dir, "--cache-dir", args.cache_dir,
            "--runs-dir", args.runs_dir, "--device", args.device,
-           "--num-workers", str(args.num_workers), "--log-level", args.log_level,
-           "--seeds", *[str(s) for s in args.seeds], "--resume"]
+           "--num-workers", str(args.num_workers), "--cache-format", args.cache_format,
+           "--log-level", args.log_level, "--seeds", *[str(s) for s in args.seeds], "--resume"]
     if args.epochs is not None:
         cmd += ["--max-epochs", str(args.epochs)]
     if args.max_samples is not None:
@@ -323,6 +323,9 @@ def build_argparser():
     p.add_argument("--device", default="cpu")
     p.add_argument("--min-cell", type=int, default=50)
     p.add_argument("--amp", action="store_true", help="Pass --amp to training runs.")
+    p.add_argument("--cache-format", default="auto", choices=["auto", "memmap", "per_file"],
+                   help="Feature cache format passed to training: auto (packed memmap if "
+                        "cache_packed/ is complete, else per-file), memmap, or per_file.")
     p.add_argument("--co-train", action="store_true",
                    help="Train all 4 systems per seed on ONE shared batch stream "
                         "(scripts/train_cotrain.py): ~4x less disk I/O, outputs verified "

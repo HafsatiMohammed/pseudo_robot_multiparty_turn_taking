@@ -74,6 +74,11 @@ python -m scripts.cache_features.run --manifest $MAN --output data/processed/cac
     --modality both --clips-root $CLIPS --speech-regions $REGIONS --layer-mode sum \
     --layer-weights 0,0,0,1,1,1,1,1,1,0,0,0,0
 
+# Phase 1b (recommended) — pack the per-file cache into ONE memmap per modality.
+# Training is I/O-bound (~808k tiny .npy opens); packing makes reads sequential/page-cacheable
+# (warm epochs read from RAM). Pure byte reorg -> verified bit-identical (--verify, 200 samples).
+python scripts/pack_cache_memmap.py --cache-dir data/processed/cache   # writes cache_packed/
+
 # Phase 4 — non-learned baselines (majority, VA-Silence, VA-Threshold) + DET/EER
 python scripts/eval_baselines.py --timing-dir data/processed/timing \
     --output reports/baselines
@@ -131,12 +136,42 @@ python scripts/verify_cotrain_equivalence.py --base configs/base.yaml \
     --seed 42 --epochs 3 --max-samples 4000
 ```
 
+### Packed (memmap) cache + modality gating
+
+Training is **I/O-bound**: profiling shows cores mostly idle, disk busy, GPU ~0% — the cost is
+~808k tiny random `.npy` opens, not bandwidth or compute. Two pure-I/O fixes (neither touches
+training logic, so no equivalence risk):
+
+- **Pack** (`scripts/pack_cache_memmap.py`): repack `cache/{audio,text}/<sid>.npy` into one
+  contiguous `cache_packed/{audio,text}.dat` memmap per modality (+ `index.parquet`,
+  `meta.json`). Reads become sequential and page-cacheable, so warm epochs are served from RAM.
+  Idempotent/resumable, chunked. It only moves bytes — the array handed to the model is
+  **byte-identical** to the per-file cache, checked by `--verify` (200 random `sample_id`s
+  compared with `np.array_equal`; runs automatically after packing, or `--verify-only`).
+- **Modality gating:** each run reads only the modalities its system uses
+  (`timing`→neither, `audio_timing`→audio, `text_timing`→text, `full`→both). Safe because the
+  model already zeros disabled modalities at their branch input, so a gated zero and a
+  read-then-zeroed real feature give identical output.
+
+The loader auto-detects `data/processed/cache_packed/` (a complete pack) and uses it; otherwise
+it falls back to the per-file cache. Control with `--cache-format {auto,memmap,per_file}` on
+`train.py` / `train_cotrain.py` / `run_ablation.py` (`memmap` errors out if no pack exists;
+`per_file` forces the old path). Packing composes with `--co-train` (the shared loader reads
+both modalities once, from the memmap). Verified bit-identical: per-file vs memmap training
+matches to `|diff|=0` across all four systems and worker counts.
+
+```
+python scripts/pack_cache_memmap.py --cache-dir data/processed/cache        # pack + verify
+python scripts/run_ablation.py ... --cache-format memmap                    # train on the pack
+```
+
 ## Layout
 
 ```
 configs/         base.yaml (+ paths, model arch, train) + per-system yamls
 scripts/         prepare_dataset.py, cache_features/, eval_baselines.py, train.py, run_ablation.py
-                 train_cotrain.py (shared-batch co-training), verify_cotrain_equivalence.py
+                 pack_cache_memmap.py (per-file cache -> memmap, --verify), train_cotrain.py
+                 (shared-batch co-training), verify_cotrain_equivalence.py
 src/data/        ami.py, regions.py, timing_features.py, dataset.py, loaders.py, multimodal.py
 src/features/    align.py, audio_wavlm.py, text_roberta.py   (frozen-encoder caching)
 src/models/      branches.py, models_multimodal.py           (GroupTurnFuse — locked design)

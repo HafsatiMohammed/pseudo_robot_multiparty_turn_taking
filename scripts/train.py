@@ -43,7 +43,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from src.data.multimodal import get_multimodal_dataloaders
 from src.eval.metrics import compute_all, macro_f1, per_class_prf
-from src.models.models_multimodal import build_system
+from src.models.models_multimodal import SYSTEM_MODALITIES, build_system
 from src.utils.checkpoint import load_checkpoint, save_checkpoint
 from src.utils.config import load_config, save_yaml
 from src.utils.logging_setup import pbar, setup_logging
@@ -171,13 +171,20 @@ def main(args):
     set_seed(seed)
     logger.info("seed set (deterministic algorithms on; per-epoch reseed for resume identity)")
 
+    # Modality gating: read ONLY the modalities this system uses (the model zeros the rest,
+    # so gated zeros vs read-then-zeroed reals are identical). timing/scalar come from the
+    # timing parquet, so only audio/text are gated here. Applies to the packed cache; on the
+    # per-file cache it likewise skips reading .npy this system discards.
+    read_modalities = set(SYSTEM_MODALITIES[system]) & {"audio", "text"}
     dls = get_multimodal_dataloaders(
         timing_dir=args.timing_dir, cache_dir=args.cache_dir,
         batch_size=tcfg["batch_size"], num_workers=args.num_workers,
         use_weighted_sampler=tcfg.get("use_weighted_sampler", True),
         max_samples=args.max_samples, seed=seed,
         worker_init_fn=seed_worker, generator=None,  # sampler uses global RNG (per-epoch reseed)
+        cache_format=args.cache_format, read_modalities=read_modalities,
     )
+    logger.info("cache_format=%s read_modalities=%s", args.cache_format, sorted(read_modalities))
     train_loader, val_loader, test_loader = dls["train"], dls["val"], dls["test"]
     train_ds = dls["train_dataset"]
 
@@ -344,6 +351,9 @@ def build_argparser():
     p.add_argument("--keep-last-k", type=int, default=0, help="Also keep the last K epoch_*.ckpt.")
     p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--device", default="cpu")
+    p.add_argument("--cache-format", default="auto", choices=["auto", "memmap", "per_file"],
+                   help="auto: packed memmap if data/processed/cache_packed/ is complete, else "
+                        "per-file; memmap: require packed; per_file: force per-file .npy.")
     p.add_argument("--log-level", default="INFO")
     p.add_argument("--stop-after-epoch", type=int, default=None,
                    help="Debug/CI: break after this epoch (last.ckpt written) WITHOUT "
