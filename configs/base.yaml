@@ -3,9 +3,9 @@
 
 paths:
   # Local AMI corpus root (may move; keep it here, not in code).
-  ami_root: /home/mohammed/Documents/robot-group-turn-taking-labeler/data/ami_original
+  ami_root: ~/Documents/hafsati_mohammed/robot-group-turn-taking-labeler/data/ami_original
   # Manifest produced upstream (does NOT exist yet -> scripts fail loudly if absent).
-  manifest: /home/mohammed/Documents/robot-group-turn-taking-labeler/data/processed/final_manifest.jsonl
+  manifest: ~/Documents/hafsati_mohammed/robot-group-turn-taking-labeler/data/processed/final_manifest.jsonl
   # Dev fixture to use until the real manifest lands.
   fixture_manifest: tests/fixtures/manifest_sample.jsonl
   # Phase 1a timing parquet output.

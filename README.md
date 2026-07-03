@@ -88,15 +88,55 @@ python scripts/train.py --base configs/base.yaml --system timing --seed 42 \
 python scripts/run_ablation.py --base configs/base.yaml \
     --timing-dir data/processed/timing --cache-dir data/processed/cache \
     --runs-dir reports/runs --output reports/ablation --seeds 13 21 42
+
+# Phase 7 (fast) — same ablation, co-trained: read each batch ONCE per seed and train
+# all 4 systems on it (~4x less disk I/O). Add --co-train; everything else is unchanged.
+python scripts/run_ablation.py --base configs/base.yaml \
+    --timing-dir data/processed/timing --cache-dir data/processed/cache \
+    --runs-dir reports/runs --output reports/ablation --seeds 13 21 42 \
+    --co-train --num-workers 12 --device cuda
 ```
 
 Systems: `timing`, `audio_timing`, `text_timing`, `full`.
+
+### Sequential vs co-trained (`--co-train`)
+
+The four systems share identical inputs (timing + cached audio + text) and differ only in
+which modalities are active (disabled ones are zeroed at their branch input by the model).
+Data loading — many small random `.npy` reads — is the bottleneck (GPU ~0%, the net is
+~1.6M params), so the sequential path re-reads the whole cache once per system (12 passes
+for 4 systems x 3 seeds).
+
+- **Sequential (default):** one `scripts/train.py` process per `(system, seed)`. Simplest;
+  use it for the reference numbers, when debugging a single system, or on a machine where
+  disk I/O is not the limit.
+- **Co-trained (`--co-train`, via `scripts/train_cotrain.py`):** one DataLoader per seed;
+  every batch is read once and fed to all four models (each with its own optimizer,
+  scheduler, early-stop, checkpoints, metrics). Turns 12 data passes into 3 (one per seed).
+  Prefer it for the full run — especially with many `--num-workers` and a warm GPU.
+
+Both write the SAME per-run outputs (`reports/runs/<system>_seed<seed>/`), so the table /
+figure assembly is identical. Co-training is a strict I/O optimization: with determinism on
+and no `--amp` its results are **bit-identical** to the sequential runs (each model sees the
+same batches, order, sampler draw, and dropout stream it would standalone). Do NOT use
+`--amp` when you need that equivalence. Both paths are resume-aware (`--co-train` skips
+fully-complete seeds and resumes partial ones from each system's `last.ckpt`).
+
+Verify equivalence before trusting a co-trained run (bit-identical => `|diff|~0`; the
+harness tolerance is `<1e-4`):
+
+```
+python scripts/verify_cotrain_equivalence.py --base configs/base.yaml \
+    --timing-dir data/processed/timing --cache-dir data/processed/cache \
+    --seed 42 --epochs 3 --max-samples 4000
+```
 
 ## Layout
 
 ```
 configs/         base.yaml (+ paths, model arch, train) + per-system yamls
 scripts/         prepare_dataset.py, cache_features/, eval_baselines.py, train.py, run_ablation.py
+                 train_cotrain.py (shared-batch co-training), verify_cotrain_equivalence.py
 src/data/        ami.py, regions.py, timing_features.py, dataset.py, loaders.py, multimodal.py
 src/features/    align.py, audio_wavlm.py, text_roberta.py   (frozen-encoder caching)
 src/models/      branches.py, models_multimodal.py           (GroupTurnFuse — locked design)

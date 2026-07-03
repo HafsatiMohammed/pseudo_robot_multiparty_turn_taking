@@ -106,6 +106,29 @@ def run_training(system, seed, args):
     return run_dir
 
 
+def run_cotrain(args):
+    """Co-train all 4 systems on ONE shared batch stream per seed (scripts/train_cotrain.py).
+
+    Produces the SAME per-run outputs as the sequential path (reports/runs/<system>_seed<seed>/)
+    but reads the feature cache once per seed instead of once per system -- ~4x less disk I/O.
+    Verified bit-identical to the sequential runs (scripts/verify_cotrain_equivalence.py).
+    --resume is passed so complete seeds are skipped and partial ones resume, matching the
+    resume-aware behavior of run_training."""
+    cmd = [sys.executable, "scripts/train_cotrain.py", "--base", args.base,
+           "--timing-dir", args.timing_dir, "--cache-dir", args.cache_dir,
+           "--runs-dir", args.runs_dir, "--device", args.device,
+           "--num-workers", str(args.num_workers), "--log-level", args.log_level,
+           "--seeds", *[str(s) for s in args.seeds], "--resume"]
+    if args.epochs is not None:
+        cmd += ["--max-epochs", str(args.epochs)]
+    if args.max_samples is not None:
+        cmd += ["--max-samples", str(args.max_samples)]
+    if args.amp:
+        cmd += ["--amp"]
+    logger.info("[co-train] all systems x %d seed(s) on a shared batch stream", len(args.seeds))
+    subprocess.run(cmd, check=True, cwd=str(_REPO_ROOT))
+
+
 def run_baselines(args, out):
     bdir = out / "baselines"
     cmd = [sys.executable, "scripts/eval_baselines.py", "--timing-dir", args.timing_dir,
@@ -163,11 +186,16 @@ def main(args):
     # 0. param accounting + matched-capacity invariant (independent of training)
     write_model_params(cfg, out)
 
-    # 1. train (resume-aware), bar over the (system, seed) grid
+    # 1. train (resume-aware). --co-train reads each batch once and trains all 4 systems
+    # on it (one data pass per seed instead of one per system); otherwise train the
+    # (system, seed) grid sequentially. Both write identical per-run outputs.
     if not args.skip_train:
-        grid = [(s, sd) for s in SYSTEMS for sd in args.seeds]
-        for system, seed in pbar(grid, desc="ablation grid", leave=True):
-            run_training(system, seed, args)
+        if args.co_train:
+            run_cotrain(args)
+        else:
+            grid = [(s, sd) for s in SYSTEMS for sd in args.seeds]
+            for system, seed in pbar(grid, desc="ablation grid", leave=True):
+                run_training(system, seed, args)
 
     # 2. baselines
     baseline_metrics, bdir = run_baselines(args, out)
@@ -295,6 +323,10 @@ def build_argparser():
     p.add_argument("--device", default="cpu")
     p.add_argument("--min-cell", type=int, default=50)
     p.add_argument("--amp", action="store_true", help="Pass --amp to training runs.")
+    p.add_argument("--co-train", action="store_true",
+                   help="Train all 4 systems per seed on ONE shared batch stream "
+                        "(scripts/train_cotrain.py): ~4x less disk I/O, outputs verified "
+                        "bit-identical to the sequential path. Otherwise train sequentially.")
     p.add_argument("--log-level", default="INFO")
     p.add_argument("--skip-train", action="store_true")
     return p
